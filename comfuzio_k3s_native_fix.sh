@@ -2,43 +2,41 @@
 # ==============================================================================
 # Title: Comfuzio's Native K3s External IP Fix for Dune: Awakening
 # Description: Automates K3s native network topology updates for Dune server
-#              WAN matchmaking. Cross-platform support (Ubuntu/Alpine).
+#              WAN matchmaking. Designed strictly for Ubuntu + K3s environments.
 # License: GNU AGPLv3
 # ==============================================================================
 
 set -e
 
 K3S_DIR="/etc/rancher/k3s"
-CONFIG_FILE="$K3S_DIR/config.yaml"
-ORIGINAL_BACKUP="$K3S_DIR/config.yaml.ORIGINAL_BEFORE_COMFUZIO_FIX"
+DROPIN_DIR="$K3S_DIR/config.yaml.d"
+CONFIG_FILE="$DROPIN_DIR/99-comfuzio-network.yaml"
+LEGACY_BACKUP="$K3S_DIR/config.yaml.ORIGINAL_BEFORE_COMFUZIO_FIX"
 FUNCOM_SCRIPT="/home/dune/.dune/download/scripts/battlegroup.sh"
 
-# --- Helper Functions (Cross-Platform) ---
-fetch_ip() {
-    local url=$1
-    if command -v curl &> /dev/null; then
-        curl -s --connect-timeout 5 "$url"
-    elif command -v wget &> /dev/null; then
-        wget -qO- --timeout=5 "$url" 2>/dev/null
-    else
-        echo ""
-    fi
-}
+echo "================================================================"
+echo "      Comfuzio's Native K3s Dune: Awakening Network Fix         "
+echo "================================================================"
 
-restart_k3s() {
-    echo "[+] Restarting K3s engine to apply topology changes..."
-    if command -v systemctl &> /dev/null; then
-        systemctl restart k3s
-    elif command -v rc-service &> /dev/null; then
-        rc-service k3s restart
-    elif [ -x "/etc/init.d/k3s" ]; then
-        /etc/init.d/k3s restart
-    else
-        echo "[-] Error: Could not detect service manager (systemctl/rc-service)."
-        echo "    Please restart K3s manually."
+# --- OS Detection (Ubuntu Only Boundary) ---
+UNSUPPORTED_MSG="Your distro is currently unsupported, if you feel like fixing this part, you are welcome! 
+In the meantime please check this Amazing Dune guide that this script is made to work with: 
+https://github.com/IEquilibriumI/dune-selfhost-ansible"
+
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    if [ "$ID" != "ubuntu" ]; then
+        echo ""
+        echo "[-] Error: Detected OS ($NAME)."
+        echo "$UNSUPPORTED_MSG"
         exit 1
     fi
-}
+else
+    echo ""
+    echo "[-] Error: Could not detect your OS."
+    echo "$UNSUPPORTED_MSG"
+    exit 1
+fi
 
 # --- Pre-Flight Checks ---
 if [ "$(id -u)" -ne 0 ]; then
@@ -51,16 +49,11 @@ if ! command -v k3s &> /dev/null; then
     exit 1
 fi
 
-if ! command -v curl &> /dev/null && ! command -v wget &> /dev/null; then
-    echo "[-] Error: Neither 'curl' nor 'wget' is installed."
-    echo "    To fix this on Alpine: sudo apk add curl"
-    echo "    To fix this on Ubuntu: sudo apt install curl"
+if ! command -v curl &> /dev/null; then
+    echo "[-] Error: 'curl' is not installed."
+    echo "    Please install it by running: sudo apt install curl"
     exit 1
 fi
-
-echo "================================================================"
-echo "      Comfuzio's Native K3s Dune: Awakening Network Fix         "
-echo "================================================================"
 
 # --- Step 1: Main Menu ---
 echo "[+] Select Action:"
@@ -74,31 +67,36 @@ read -r MAIN_CHOICE
 if [ "$MAIN_CHOICE" = "3" ]; then
     echo ""
     echo "[+] Initializing Restore System..."
-    if [ ! -f "$ORIGINAL_BACKUP" ]; then
-        echo "[-] Error: Could not find your original backup file."
-        exit 1
+    
+    # Restore legacy overwritten config if it exists
+    if [ -f "$LEGACY_BACKUP" ]; then
+        echo "[+] Legacy backup found. Restoring main config.yaml..."
+        cp "$LEGACY_BACKUP" "$K3S_DIR/config.yaml"
+        rm -f "$LEGACY_BACKUP"
     fi
 
-    echo "[+] Restoring configuration to original state..."
-    cp "$ORIGINAL_BACKUP" "$CONFIG_FILE"
-    rm -f "$ORIGINAL_BACKUP"
+    # Remove the drop-in file
+    if [ -f "$CONFIG_FILE" ]; then
+        echo "[+] Removing Comfuzio network drop-in configuration..."
+        rm -f "$CONFIG_FILE"
+    else
+        echo "[*] No active drop-in fix found to remove."
+    fi
     
-    restart_k3s
+    echo "[+] Restarting K3s engine..."
+    systemctl restart k3s
     
     if [ -f "$FUNCOM_SCRIPT" ]; then
         echo "[+] Recycling Funcom cluster components..."
-        sudo -u dune bash "$FUNCOM_SCRIPT" stop || true
+        sudo -i -u dune bash "$FUNCOM_SCRIPT" stop || true
         sleep 5
-        sudo -u dune bash "$FUNCOM_SCRIPT" start || true
+        sudo -i -u dune bash "$FUNCOM_SCRIPT" start || true
     fi
 
     echo ""
     echo "=========================================================================="
     echo " NOTICE: This script comes with no warranty. I apologize if it caused"
     echo " issues. Your original config has been restored successfully."
-    echo " Everything is now exactly as if you had never run this script."
-    echo "=========================================================================="
-    echo " If you encountered a bug, please upload your logs as a GitHub Issue."
     echo "=========================================================================="
     exit 0
 fi
@@ -112,14 +110,13 @@ fi
 echo ""
 echo "[+] Detecting network topology..."
 
-PUBLIC_IP=$(fetch_ip "https://ifconfig.me")
+PUBLIC_IP=$(curl -s --connect-timeout 5 https://ifconfig.me || true)
 if [ -z "$PUBLIC_IP" ]; then
-    echo "[-] Warning: Primary API failed. Trying fallback..."
-    PUBLIC_IP=$(fetch_ip "https://api.ipify.org")
+    PUBLIC_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || true)
 fi
 
 if [ -z "$PUBLIC_IP" ] && [ "$MAIN_CHOICE" = "1" ]; then
-    echo "[-] Error: Failed to detect Public WAN IP."
+    echo "[-] Error: Failed to detect Public WAN IP. Check your internet connection."
     exit 1
 fi
 
@@ -134,21 +131,7 @@ fi
 if [ "$MAIN_CHOICE" = "1" ]; then echo "[*] Discovered Public WAN IP : $PUBLIC_IP"; fi
 echo "[*] Discovered Local LAN IP  : $LAN_IP"
 
-# --- Step 3: Intelligent Backup Layer ---
-mkdir -p "$K3S_DIR"
-
-if [ -f "$CONFIG_FILE" ]; then
-    if [ ! -f "$ORIGINAL_BACKUP" ]; then
-        cp "$CONFIG_FILE" "$ORIGINAL_BACKUP"
-        echo "[+] Protected original configuration backup saved."
-    fi
-    INCREMENTAL_BACKUP="config.yaml.backup.$(date +%s)"
-    cp "$CONFIG_FILE" "$K3S_DIR/$INCREMENTAL_BACKUP"
-else
-    touch "$ORIGINAL_BACKUP"
-fi
-
-# --- Step 4: Pre-Flight Optimization Checks ---
+# --- Step 3: Pre-Flight Optimization Checks ---
 if [ "$MAIN_CHOICE" = "1" ]; then
     echo ""
     echo "[+] Checking if network fix is already active..."
@@ -167,10 +150,12 @@ if [ "$MAIN_CHOICE" = "1" ]; then
     fi
 fi
 
-# --- Step 5: Configuration Writing ---
+# --- Step 4: Safe Drop-In Configuration Writing ---
 echo ""
+mkdir -p "$DROPIN_DIR"
+
 if [ "$MAIN_CHOICE" = "1" ]; then
-    echo "[+] Generating native K3s routing configuration for External Play..."
+    echo "[+] Injecting native K3s routing drop-in for External Play..."
     cat <<EOF > "$CONFIG_FILE"
 # Generated by Comfuzio's Dune: Awakening Network Tool
 node-ip: $LAN_IP
@@ -181,7 +166,7 @@ tls-san:
   - $LAN_IP
 EOF
 else
-    echo "[+] Generating native K3s routing configuration for LAN-Only Play..."
+    echo "[+] Injecting native K3s routing drop-in for LAN-Only Play..."
     cat <<EOF > "$CONFIG_FILE"
 # Generated by Comfuzio's Dune: Awakening Network Tool
 node-ip: $LAN_IP
@@ -191,9 +176,10 @@ tls-san:
 EOF
 fi
 
-# --- Step 6: Service Management & Smart Wait Loop ---
+# --- Step 5: Service Management & Smart Wait Loop ---
 echo ""
-restart_k3s
+echo "[+] Restarting K3s engine to apply topology changes..."
+systemctl restart k3s
 
 echo "[+] Waiting for K3s API to come online..."
 ATTEMPTS=0
@@ -203,24 +189,24 @@ while ! kubectl get nodes &> /dev/null; do
     ATTEMPTS=$((ATTEMPTS+1))
     if [ "$ATTEMPTS" -ge 30 ]; then
         echo ""
-        echo "[-] Timeout waiting for K3s API."
+        echo "[-] Timeout waiting for K3s API. It might be crashlooping."
         exit 1
     fi
 done
 echo ""
 echo "[*] K3s API is responsive!"
 
-# --- Step 7: Automated Funcom Cluster Recycling ---
+# --- Step 6: Automated Funcom Cluster Recycling ---
 if [ -f "$FUNCOM_SCRIPT" ]; then
     echo ""
     echo "[+] Automated Funcom script detected at: $FUNCOM_SCRIPT"
     echo "[+] Initiating safe cluster drain (battlegroup stop)..."
     
-    sudo -u dune bash "$FUNCOM_SCRIPT" stop
+    sudo -i -u dune bash "$FUNCOM_SCRIPT" stop || true
     
     echo "[+] Waiting for all game instances to terminate successfully..."
     LOOP_COUNT=0
-    while sudo -u dune bash "$FUNCOM_SCRIPT" status | grep -q "Running"; do
+    while sudo -i -u dune bash "$FUNCOM_SCRIPT" status 2>/dev/null | grep -q "Running"; do
         printf "."
         sleep 3
         LOOP_COUNT=$((LOOP_COUNT+1))
@@ -232,7 +218,7 @@ if [ -f "$FUNCOM_SCRIPT" ]; then
     done
     echo ""
     echo "[*] Cluster drained. Initiating fresh boot with new network matrix..."
-    sudo -u dune bash "$FUNCOM_SCRIPT" start
+    sudo -i -u dune bash "$FUNCOM_SCRIPT" start
     echo "[*] Funcom cluster successfully initialized."
 else
     echo ""
@@ -240,7 +226,7 @@ else
     echo "    manually to force them to read the new K3s External-IP configuration."
 fi
 
-# --- Step 8: Verification Phase ---
+# --- Step 7: Verification Phase ---
 echo ""
 echo "================================================================"
 echo " SUCCESS: SERVER TOPOLOGY RECONFIGURED NATIVELY"
