@@ -33,4 +33,28 @@ Make sure your edge router (e.g., UniFi UCG-Fiber) is forwarding **UDP 7777-7810
 
 1. Clone or download the script to your server VM:
    ```bash
-   nano setup_dune_net.sh
+   nano dune_fix.sh
+   ```
+2. Paste the script content into the file, save, and exit
+3. ```
+   chmod +x dune_fix.sh
+   ```
+4. ```
+   sudo ./dune_fix.sh
+   ```
+
+⚠️ Note for Alpine Linux / Non-Persistent Systems: Since iptables and interface aliases are cleared out of memory upon system reboots, simply run this script once whenever your host server restarts or when K3s provisions a brand-new RabbitMQ Pod IP.
+
+License
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+
+Key Conditions:
+Commercial Use: Allowed.
+
+Modification: Allowed, but you must prominently document changes.
+
+Distribution: Allowed under the same license.
+
+Network Deployment: Critical for server tools—if you modify this script and run it on a server accessible over a network, you must make your modified source code available to those network users.
+
+Parts of this documentation have been writen by AI (gemini), emoji and decorations in the script also has been provided by AI (gemini)
